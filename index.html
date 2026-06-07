@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>КИБЕР-ГОЙДА: ОНЛАЙН</title>
-<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Ysabeau+SC:wght@400;700;900&display=swap" rel="stylesheet">
 <style>
@@ -307,6 +307,17 @@ body.super-mode-active::after{opacity:.85;}
 </div>
 
 <script>
+// catch any global JS error and show it in the lobby
+window.onerror=function(msg,src,line){
+  let el=document.getElementById('lobby-status');
+  if(el)el.textContent='❌ JS ERR: '+msg+' (line '+line+')';
+  return false;
+};
+window.addEventListener('unhandledrejection',function(e){
+  let el=document.getElementById('lobby-status');
+  if(el)el.textContent='❌ Promise: '+(e.reason&&e.reason.message||e.reason);
+});
+
 const DEFS={GOYDA:{n:'ГОЙДА',ic:'⚔️',bg:'#5c0808',bc:'#e74c3c',cnt:8,role:'atk',num:'9',unit:'УРОН',kind:'dmg',base:10,eff:'Базовый натиск. Каждый ход комбо ГОЙДА подряд: +2 к урону.'},GOYDUSHKA:{n:'ГОЙДУШКА',ic:'🧚‍♀️',bg:'#4a0e4e',bc:'#9b59b6',cnt:4,role:'sup',num:'16',unit:'ОЗ',kind:'heal',base:12,eff:'Ласковая Гойдушка лечит раны. Наполняет Базометр на +12%.'},GOYDO_SHIELD:{n:'ГОЙДО-ЩИТ',ic:'🛡️',bg:'#092c4c',bc:'#00ccff',cnt:6,role:'def',num:'+1',unit:'БРОНЯ',kind:'shield',base:8,eff:'Активирует 1 слот брони. Предельный лимит брони: 2 значка.'},GOYDO_FONK:{n:'ГОЙДО-ФОНК',ic:'🎛️',bg:'#4d2c00',bc:'#ffbd15',cnt:5,role:'atk',num:'14',unit:'УРОН',kind:'dmg',base:15,eff:'Оглушительный бас Гойдо-Фонка раскачивает Базометр на +15%.'},PEREGOYDA:{n:'ПЕРЕГОЙДА',ic:'🪬',bg:'#1b072e',bc:'#b366ff',cnt:4,role:'def',num:'+1',unit:'ОТРАЖ',kind:'shield',base:6,eff:'Включает 1 слот зеркального отражения. Максимальный лимит: 2.'},GOYDO_DILER:{n:'ГОЙДО-ДИЛЕР',ic:'🃏',bg:'#05322b',bc:'#00ffcc',cnt:4,role:'sup',num:'+2',unit:'КАРТЫ',kind:'draw',base:10,eff:'Вытягивает 2 новых свитка из колоды для комбо.'},GOYDO_HAMSTER:{n:'ГОЙДО-ХОМЯК',ic:'🐹',bg:'#152238',bc:'#00a2ff',cnt:4,role:'sup',num:'+2',unit:'МОНЕТЫ',kind:'coin',base:8,eff:'Добывает 2 монеты для вызова тактических вечевых способностей.'},NAGOYDATEL:{n:'НАГОЙДАТЕЛЬ',ic:'🔥',bg:'#5c2c00',bc:'#ff6600',cnt:4,role:'sup',num:'+20',unit:'БАЗА',kind:'base',base:20,eff:'Резко нагнетает Базометр (+20%). Не наносит прямого урона.'},CRINGE_GOYDA:{n:'КРИНЖО-ГОЙДА',ic:'🤮',bg:'#1a2e1c',bc:'#2ecc71',cnt:4,role:'atk',num:'10',unit:'УРОН',kind:'dmg',base:5,eff:'Сбивает Базометр противника на −15%. Наносит 10 урона.'},KRIO_GOYDA:{n:'КРИО-ГОЙДА',ic:'❄️',bg:'#023440',bc:'#3aebff',cnt:3,role:'def',num:'12',unit:'УРОН',kind:'dmg',base:5,eff:'Замораживает прирост Базометра врага на следующий ход.'},OPLICH_GOYDA:{n:'ОПРИЧ-ГОЙДА',ic:'💥',bg:'#6f0505',bc:'#ff1111',cnt:3,role:'atk',num:'25',unit:'УРОН',kind:'dmg',base:25,eff:'Тяжелый удар. Можно разыграть только на ЭТАПЕ II и выше.'},GOYDO_OBEREG:{n:'ГОЙДО-ОБЕРЕГ',ic:'🧿',bg:'#02223a',bc:'#00ffff',cnt:3,role:'def',num:'+1',unit:'ЗАЩИТЫ',kind:'shield',base:10,eff:'Дарует 1 Броню и 1 Отражение. Требуется ЭТАП II и выше.'},GIPER_GOYD:{n:'ГИПЕР-ГОЙД',ic:'⚡',bg:'#3d0558',bc:'#d8a8ff',cnt:2,role:'atk',num:'32',unit:'УРОН',kind:'dmg',base:30,eff:'Божественный разряд Гипербореи. Требует ЭТАП III. Ломает броню.'},ABSOLUT_GOYDA:{n:'АБСОЛЮТ-ГОЙДА',ic:'🌟',bg:'#1c1c1c',bc:'#ffffff',cnt:2,role:'sup',num:'+35',unit:'БАЗА',kind:'base',base:35,eff:'Окончательное слово. Дарует +35% Базы и лечит 20 ОЗ.'}};
 const TAP=[
   {n:'Зажим',ic:'🥚',d:'12 чистого урона',cost:2,bg:'#5a1c0f',bc:'#e74c3c',run:(pi,me,foe)=>{doAtk(pi,12,true,me,foe);}},
@@ -345,6 +356,7 @@ function mqttConnect(cb){
 }
 
 function createRoom(){
+  if(typeof mqtt==='undefined'){setLobbyStatus('❌ Библиотека не загружена — проверь интернет и перезагрузи страницу','err');return;}
   initSound();
   setLobbyStatus('Подключение...','wait');
   document.getElementById('btn-create').disabled=true;document.getElementById('btn-join').disabled=true;
@@ -369,6 +381,7 @@ function createRoom(){
 }
 
 function joinRoomBtn(){
+  if(typeof mqtt==='undefined'){setLobbyStatus('❌ Библиотека не загружена — проверь интернет и перезагрузи страницу','err');return;}
   initSound();
   let code=document.getElementById('room-input').value.trim().toUpperCase();
   if(code.length<4){setLobbyStatus('Введи код комнаты','err');return;}
@@ -510,6 +523,19 @@ function setupHandHover(handEl){handEl.addEventListener('mouseover',e=>{const ho
 (function(){const p=document.createElement('div');p.id='pass';p.style.cssText='position:fixed;inset:0;background:radial-gradient(circle at 50% 40%,#150601 0%,#000000 100%);display:none;flex-direction:column;align-items:center;justify-content:center;z-index:130;padding:20px;overflow-y:auto;';p.innerHTML=`<h2 id="pass-h" style="font-size:24px;color:#ffd700;letter-spacing:2.5px;margin-bottom:4px;text-shadow:0 0 15px rgba(212,160,23,.5);text-transform:uppercase;"></h2><p id="pass-p" style="font-size:12px;color:#f4d58d;opacity:.8;margin-bottom:12px;text-align:center;max-width:580px;"></p><div id="pass-leg"></div><button class="btn" onclick="confirmPass()">ГОЙДА! — Начать Сечу!</button>`;document.body.appendChild(p);})();
 
 initGame();render();renderDiscard(0);renderDiscard(1);
+// Show library load status in lobby
+setTimeout(()=>{
+  let el=document.getElementById('lobby-status');
+  if(!el)return;
+  if(typeof mqtt==='undefined'){
+    el.textContent='⚠ mqtt не загружен — обнови страницу (Ctrl+F5)';
+    el.className='lobby-status err';
+  } else {
+    el.textContent='✓ Готово к подключению';
+    el.style.color='#39ff14';
+    el.style.fontSize='9px';
+  }
+},600);
 </script>
 </body>
 </html>
