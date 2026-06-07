@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>КИБЕР-ГОЙДА: ОНЛАЙН</title>
-<script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Ysabeau+SC:wght@400;700;900&display=swap" rel="stylesheet">
 <style>
@@ -328,86 +328,119 @@ function draw(p,n){for(let i=0;i<n;i++){if(!G.deck.length){G.deck=buildDeck();ad
 function rollAbilities(p){let t=TAP.map((_,i)=>i),idx=[];for(let i=0;i<3;i++){let r=Math.floor(Math.random()*t.length);idx.push(t.splice(r,1)[0]);}p.abilIdx=idx;p.abilities=idx.map(i=>TAP[i]);}
 function initGame(){G={deck:buildDeck(),turn:0,over:false,last:[null,null],disc:[[],[]],logLines:[],players:[mkP(),mkP()]};draw(G.players[0],5);draw(G.players[1],5);G.players[0].coins=1;rollAbilities(G.players[0]);rollAbilities(G.players[1]);document.getElementById('log').innerHTML='';document.getElementById('sl-p1').innerHTML='';document.getElementById('sl-p2').innerHTML='';document.getElementById('disc-p1-stack').innerHTML='';document.getElementById('disc-p2-stack').innerHTML='';document.getElementById('over').style.display='none';document.body.classList.remove('super-mode-active');addLog('⚔️ Бойцы вышли на ратное поле! ГОЙДА!','#ffbd15');}
 
-// ═══ GUN.JS NETWORKING ═══
-let gun=null,roomRef=null,roomCode=null,syncCounter=0;
+// ═══ MQTT NETWORKING (HiveMQ public broker) ═══
+let mqttClient=null,roomCode=null,syncCounter=0,gameStarted=false;
+const MQTT_URL='wss://broker.hivemq.com:8884/mqtt';
 
-function initGun(){if(gun)return;gun=Gun({peers:['https://gun.eco/gun'],localStorage:false});}
 function genCode(){const ch='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<6;i++)c+=ch[Math.floor(Math.random()*ch.length)];return c;}
 function setLobbyStatus(msg,cls){let el=document.getElementById('lobby-status');el.textContent=msg;el.className='lobby-status'+(cls?' '+cls:'');}
 
+function mqttConnect(cb){
+  let cid='goyda_'+Math.random().toString(36).substr(2,9);
+  let cl=mqtt.connect(MQTT_URL,{clientId:cid,clean:true,connectTimeout:8000,reconnectPeriod:0});
+  let done=false;
+  cl.on('connect',()=>{done=true;cb(null,cl);});
+  cl.on('error',(e)=>{if(!done){done=true;cb(e,null);}});
+  setTimeout(()=>{if(!done){done=true;cb(new Error('Таймаут соединения'),null);}},10000);
+}
+
 function createRoom(){
-  initSound();initGun();
-  roomCode=genCode();myIndex=0;isOnline=true;
-  initGame();
-  setLobbyStatus('','');
+  initSound();
+  setLobbyStatus('Подключение...','wait');
   document.getElementById('btn-create').disabled=true;document.getElementById('btn-join').disabled=true;
-  roomRef=gun.get('goyda2025-'+roomCode);
-  // Write state so room "exists"
-  _gunPut(serializeState(),'init');
-  document.getElementById('lb-create-section').style.display='none';
-  document.getElementById('lb-join-section').style.display='none';
-  document.getElementById('lb-waiting').style.display='flex';
-  document.getElementById('code-display').textContent=roomCode;
-  document.getElementById('conn-badge').textContent='⏳ ЖДЁМ';
-  document.getElementById('conn-badge').style.color='#ffd700';
-  // Wait for guest signal
-  roomRef.get('join').on((val)=>{
-    if(val===true&&document.getElementById('lobby').style.display!=='none'){
-      startOnlineGame();
-    }
+  mqttConnect((err,cl)=>{
+    if(err){setLobbyStatus('❌ '+err.message,'err');document.getElementById('btn-create').disabled=false;document.getElementById('btn-join').disabled=false;return;}
+    mqttClient=cl;
+    roomCode=genCode();myIndex=0;isOnline=true;gameStarted=false;
+    initGame();
+    let topic='goyda25/'+roomCode;
+    cl.subscribe(topic);
+    cl.on('message',(_,msg)=>onMsg(msg));
+    cl.on('close',onDisconnect);
+    _mqttPub('init');
+    document.getElementById('lb-create-section').style.display='none';
+    document.getElementById('lb-join-section').style.display='none';
+    document.getElementById('lb-waiting').style.display='flex';
+    document.getElementById('code-display').textContent=roomCode;
+    document.getElementById('conn-badge').textContent='⏳ ЖДЁМ';
+    document.getElementById('conn-badge').style.color='#ffd700';
+    setLobbyStatus('');
   });
 }
 
 function joinRoomBtn(){
-  initSound();initGun();
+  initSound();
   let code=document.getElementById('room-input').value.trim().toUpperCase();
   if(code.length<4){setLobbyStatus('Введи код комнаты','err');return;}
-  setLobbyStatus('Подключаемся...','wait');
+  setLobbyStatus('Подключение...','wait');
   document.getElementById('btn-create').disabled=true;document.getElementById('btn-join').disabled=true;
-  let timer=setTimeout(()=>{setLobbyStatus('❌ Комната не найдена (код верный?)','err');document.getElementById('btn-create').disabled=false;document.getElementById('btn-join').disabled=false;myIndex=-1;isOnline=false;},7000);
-  gun.get('goyda2025-'+code).get('s').once((val)=>{
-    if(!val){return;} // wait for timeout
-    clearTimeout(timer);
-    myIndex=1;isOnline=true;roomCode=code;
-    roomRef=gun.get('goyda2025-'+code);
-    isRemoteUpdate=true;
-    try{applyRemoteState(JSON.parse(val));}catch(e){}
-    isRemoteUpdate=false;
-    roomRef.get('join').put(true);
-    startOnlineGame();
+  mqttConnect((err,cl)=>{
+    if(err){setLobbyStatus('❌ '+err.message,'err');document.getElementById('btn-create').disabled=false;document.getElementById('btn-join').disabled=false;return;}
+    mqttClient=cl;roomCode=code;
+    let topic='goyda25/'+code;
+    cl.subscribe(topic);
+    cl.on('message',(_,msg)=>onMsg(msg));
+    cl.on('close',onDisconnect);
+    let timer=setTimeout(()=>{if(myIndex===-1){setLobbyStatus('❌ Комната не найдена','err');document.getElementById('btn-create').disabled=false;document.getElementById('btn-join').disabled=false;cl.end(true);isOnline=false;}},7000);
+    // retained message from host arrives automatically
+    // onMsg handles it and sets myIndex=1
+    window._joinTimer=timer;
   });
 }
 
+function onMsg(msgBuf){
+  let d;try{d=JSON.parse(msgBuf.toString());}catch(e){return;}
+  // Guest receives host's state for the first time
+  if(myIndex===-1&&d._p===0&&(d._t==='init'||d._t==='state')){
+    clearTimeout(window._joinTimer);
+    myIndex=1;isOnline=true;gameStarted=false;
+    isRemoteUpdate=true;applyRemoteState(d);isRemoteUpdate=false;
+    _mqttPub('join');
+    startOnlineGame();
+    return;
+  }
+  // Host receives join signal
+  if(myIndex===0&&!gameStarted&&d._p===1&&d._t==='join'){
+    startOnlineGame();return;
+  }
+  // In-game moves
+  if(!gameStarted||d._p===myIndex)return;
+  if(d._t!=='state'&&d._t!=='reset')return;
+  let isReset=d._t==='reset';
+  isRemoteUpdate=true;applyRemoteState(d);
+  if(isReset)document.getElementById('log').innerHTML='';
+  renderLogFromState();render();renderDiscard(0);renderDiscard(1);
+  isRemoteUpdate=false;updateWaitingOverlay();
+  if(G.over)showOnlineOver();
+  if(isReset){document.getElementById('over').style.display='none';addLog('⚔️ Новая битва начата!','#39ff14');}
+}
+
+function onDisconnect(){
+  document.getElementById('conn-badge').textContent='❌ РАЗРЫВ';
+  document.getElementById('conn-badge').style.color='#ff5555';
+  if(gameStarted)addLog('❌ Соединение разорвано.','#ff5555');
+}
+
 function startOnlineGame(){
+  gameStarted=true;
   document.getElementById('lobby').style.display='none';
   document.getElementById('conn-badge').textContent='⚡ В СЕТИ';
   document.getElementById('conn-badge').style.color='#39ff14';
   document.getElementById('pname'+(myIndex+1)).textContent='⚔ ВЫ (ВОИН '+(myIndex===0?'I':'II')+')';
   document.getElementById('pname'+(2-myIndex)).textContent='⚔ СОПЕРНИК';
-  // Subscribe to opponent moves
-  roomRef.get('s').on((val)=>{
-    if(!val)return;
-    let parsed;try{parsed=JSON.parse(val);}catch(e){return;}
-    if(parsed._p===myIndex)return; // own update — skip
-    let isReset=parsed._t==='reset';
-    isRemoteUpdate=true;
-    applyRemoteState(parsed);
-    if(isReset)document.getElementById('log').innerHTML='';
-    renderLogFromState();render();renderDiscard(0);renderDiscard(1);
-    isRemoteUpdate=false;updateWaitingOverlay();
-    if(G.over)showOnlineOver();
-    if(isReset){document.getElementById('over').style.display='none';addLog('⚔️ Новая битва начата!','#39ff14');}
-  });
   render();renderDiscard(0);renderDiscard(1);updateWaitingOverlay();
   if(myIndex===0)syncState('state');
   addLog('🌐 Соперник подключился! Бой начат.','#39ff14');
 }
 
-function _gunPut(state,t){
-  state._p=myIndex;state._t=t||'state';state._c=++syncCounter;
-  roomRef.get('s').put(JSON.stringify(state));
+function _mqttPub(t,state){
+  if(!mqttClient||!roomCode)return;
+  let s=state||serializeState();
+  s._p=myIndex;s._t=t||'state';s._c=++syncCounter;
+  let retain=(t==='init'||t==='state');
+  mqttClient.publish('goyda25/'+roomCode,JSON.stringify(s),{retain,qos:1});
 }
-function syncState(type){if(isRemoteUpdate||!isOnline||!roomRef)return;_gunPut(serializeState(),type||'state');}
+function syncState(type){if(isRemoteUpdate||!isOnline)return;_mqttPub(type||'state');}
 function serializeState(){return{deck:G.deck,turn:G.turn,over:G.over,last:G.last,disc:G.disc,logLines:G.logLines||[],players:G.players.map(p=>({hp:p.hp,sh:p.sh,re:p.re,combo:p.combo,coins:p.coins,hand:p.hand,base:p.base,superMode:p.superMode,superTurns:p.superTurns,freezeNext:p.freezeNext,abilIdx:p.abilIdx||[]}))};}
 function applyRemoteState(s){G={deck:s.deck||[],turn:s.turn,over:s.over||false,last:s.last||[null,null],disc:s.disc||[[],[]],logLines:s.logLines||[],players:(s.players||[]).map(p=>({...p,abilities:(p.abilIdx||[]).map(i=>TAP[i])}));};}
 function updateWaitingOverlay(){document.getElementById('waiting-overlay').style.display=(isOnline&&G.turn!==myIndex&&!G.over)?'flex':'none';}
@@ -429,7 +462,7 @@ function showOver(html){document.getElementById('over-txt').innerHTML=html;docum
 function getStage(v){return v>=66?3:v>=33?2:1;}
 function showPass(pi){if(isOnline)return;document.getElementById('pass-h').textContent='ПЕРЕДАЧА ХОДА: '+pn(pi);document.getElementById('pass-p').textContent='Передайте устройство следующему опричнику!';document.getElementById('pass-leg').innerHTML='';document.getElementById('pass').style.display='flex';render();}
 function confirmPass(){document.getElementById('pass').style.display='none';render();}
-function resetGame(){if(isOnline){if(myIndex===0){initGame();syncState('reset');render();renderDiscard(0);renderDiscard(1);updateWaitingOverlay();}else{addLog('⏳ Ожидаем хоста...','#ffd700');}document.getElementById('over').style.display='none';return;}initGame();render();renderDiscard(0);renderDiscard(1);showPass(0);}
+function resetGame(){if(isOnline){if(myIndex===0){initGame();_mqttPub('reset');render();renderDiscard(0);renderDiscard(1);updateWaitingOverlay();}else{addLog('⏳ Ожидаем хоста...','#ffd700');}document.getElementById('over').style.display='none';return;}initGame();render();renderDiscard(0);renderDiscard(1);showPass(0);}
 function pn(pi){if(isOnline)return pi===myIndex?'ВЫ':'СОПЕРНИК';return pi===0?'ВОИН I':'ВОИН II';}
 
 // RENDER
